@@ -6,9 +6,10 @@
 对应关系：
   apfsds.png     尾翼稳定脱壳穿甲弹
   apds.png       脱壳穿甲弹
-  apds_belt.png  机炮三发弹链（弹药名里带 APDS-T 时使用）
+  apds_belt.png  机炮三发弹链（口径小于 50mm 的 APDS-T 用这张，主炮的穿甲弹仍用 apds.png）
   heatfs.png     破甲弹
   he.png         榴弹
   atgm.png       反坦克导弹
+  smoke.png      烟幕弹（车辆烟幕发射器剩余发数）
 
 想换成自己的图：把同名 PNG 放进 UserData/AmmoIcons（游戏 Bin 目录下），会覆盖这里的同名文件。

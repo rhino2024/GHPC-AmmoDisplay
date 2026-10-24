@@ -1,6 +1,6 @@
 ﻿# 生成弹药显示 mod 自带的弹种图标（全部为程序绘制的原创图形，不含任何第三方素材）
 # 用法：powershell -ExecutionPolicy Bypass -File generate-icons.ps1
-# 输出：本目录下的 apds.png / apds_belt.png / apfsds.png / atgm.png / he.png / heatfs.png（128x128）
+# 输出：本目录下的 apds.png / apds_belt.png / apfsds.png / atgm.png / he.png / heatfs.png / smoke.png（128x128）
 #       以及 _preview.png（仅供人眼检查，不发版）
 
 Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
@@ -39,6 +39,7 @@ public static class AmmoIconGen
         Draw("he", dir, new Action<Graphics>(DrawHe));
         Draw("atgm", dir, new Action<Graphics>(DrawAtgm));
         Draw("apds_belt", dir, new Action<Graphics>(DrawBelt));
+        Draw("smoke", dir, new Action<Graphics>(DrawSmoke));
         Preview(dir);
         HudPreview(dir);
     }
@@ -306,11 +307,46 @@ public static class AmmoIconGen
         }
     }
 
+    static void DrawSmoke(Graphics g)
+    {
+        // 烟幕弹发射筒：筒口后面先铺一团烟，再画筒体压在前面
+        Puff(g, 176f, 196f, 66f, Color.FromArgb(0x8e, 0x99, 0xa4));
+        Puff(g, 252f, 138f, 84f, Color.FromArgb(0xba, 0xc4, 0xcd));
+        Puff(g, 338f, 198f, 60f, Color.FromArgb(0x99, 0xa4, 0xaf));
+        Puff(g, 214f, 252f, 50f, Color.FromArgb(0xd2, 0xda, 0xe1));
+        Puff(g, 300f, 250f, 44f, Color.FromArgb(0xc4, 0xcd, 0xd5));
+
+        float cx = 256f;
+        using (var p = Rounded(new RectangleF(cx - 62f, 268f, 124f, 196f), 18f))
+            FillCylinder(g, p, Color.FromArgb(0x35, 0x3d, 0x2e), Color.FromArgb(0x8c, 0x99, 0x77), Color.FromArgb(0x28, 0x2e, 0x23));
+        // 筒口：外沿 + 朝向镜头的黑洞
+        using (var p = new GraphicsPath())
+        {
+            p.AddEllipse(cx - 66f, 246f, 132f, 40f);
+            FillCylinder(g, p, Color.FromArgb(0x3a, 0x43, 0x33), Color.FromArgb(0xa2, 0xaf, 0x8b), Color.FromArgb(0x2b, 0x31, 0x26));
+        }
+        using (var p = new GraphicsPath())
+        {
+            p.AddEllipse(cx - 46f, 254f, 92f, 24f);
+            using (var b = new SolidBrush(Color.FromArgb(0x15, 0x18, 0x12))) g.FillPath(b, p);
+        }
+        Band(g, cx, 330f, 62f, 16f, Color.FromArgb(0x5c, 0x66, 0x4c));
+        Band(g, cx, 372f, 62f, 20f, Color.FromArgb(0xd8, 0xdc, 0xd2));
+        Band(g, cx, 418f, 62f, 14f, Color.FromArgb(0x4a, 0x53, 0x3d));
+        Band(g, cx, 452f, 68f, 18f, Color.FromArgb(0x3a, 0x42, 0x33));
+    }
+
+    static void Puff(Graphics g, float x, float y, float r, Color c)
+    {
+        using (var b = new SolidBrush(c)) g.FillEllipse(b, x - r, y - r, r * 2f, r * 2f);
+    }
+
     static void Preview(string dir)
     {
-        string[] names = new string[] { "apfsds", "apds", "apds_belt", "heatfs", "he", "atgm" };
+        string[] names = new string[] { "apfsds", "apds", "apds_belt", "heatfs", "he", "atgm", "smoke" };
         int cell = 160, pad = 12, label = 22;
-        using (var bmp = new Bitmap(cell * 3 + pad * 4, (cell + label) * 2 + pad * 3, PixelFormat.Format32bppArgb))
+        int rows = (names.Length + 2) / 3;
+        using (var bmp = new Bitmap(cell * 3 + pad * 4, (cell + label) * rows + pad * (rows + 1), PixelFormat.Format32bppArgb))
         using (var g = Graphics.FromImage(bmp))
         {
             g.Clear(Color.FromArgb(0x1a, 0x22, 0x2e));
@@ -335,8 +371,8 @@ public static class AmmoIconGen
     // 96 px 格子 + 右下角数字，模拟游戏里 HUD 的实际观感
     static void HudPreview(string dir)
     {
-        string[] names = new string[] { "apfsds", "apds", "apds_belt", "heatfs", "he", "atgm" };
-        string[] counts = new string[] { "12", "7", "195", "8", "6", "2" };
+        string[] names = new string[] { "apfsds", "apds", "apds_belt", "heatfs", "he", "atgm", "smoke" };
+        string[] counts = new string[] { "12", "7", "195", "8", "6", "2", "4" };
         int cell = 96, gap = 10, pad = 14;
         int w = pad * 2 + (cell + gap) * names.Length - gap;
         int h = pad * 2 + cell;

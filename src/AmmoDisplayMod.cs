@@ -10,7 +10,7 @@ using UnityEngine;
 // the assembly also carries a legacy global-namespace AmmoRack, which would win over the import below
 using Rack = GHPC.Weapons.AmmoRack;
 
-[assembly: MelonInfo(typeof(AmmoDisplay.AmmoDisplayMod), "弹药架显示", "1.7.0", "rhino2024")]
+[assembly: MelonInfo(typeof(AmmoDisplay.AmmoDisplayMod), "弹药架显示", "1.8.1", "rhino2024")]
 [assembly: MelonGame("Radian Simulations LLC", "GHPC")]
 
 namespace AmmoDisplay
@@ -25,7 +25,11 @@ namespace AmmoDisplay
     // 「带导弹的机炮车没有 ATGM 图标」。识别用 WeaponSystem.GuidanceUnit，图标一律先试 atgm.png。
     // 图标还先按弹种全名里的制式代号认（APDS-T → apds、APFSDS → apfsds、HEAT → heatfs），因为游戏自己的
     // 短名会粗分：M2 的「25mm APDS-T M791」短名是 Sabot，照短名就套成 apfsds 的图。
-    // 1.6.2 起机炮的 APDS-T（全名带 -T）改用 apds_belt.png：三发一整条弹链，和单发的 apds.png 区分开。
+    // 1.6.2 起机炮的 APDS-T 改用 apds_belt.png：三发一整条弹链，和单发的 apds.png 区分开。
+    // 1.8.1 修：坦克炮的「105mm DM13 APDS-T」全名也带 -T，1.6.2 的判据把它当成机炮弹套了弹链图。
+    // 现在按口径分——Caliber 小于 50mm 才算机炮（25mm M791、30mm 2A42 这些），105/120mm 一律单发图。
+    // 1.8.0 起主炮那排末尾多一格烟幕弹。烟幕发射器不是 WeaponSystem（玩家按键走的是 VehicleSmokeManager），
+    // 所以不在上面两排里，必须单独读全车每个发射管的 SmokeSlot.Rounds 加起来；图标固定用 smoke.png。
     //
     // 全车总数的取法有两批，缺一不可：
     // ① 弹架上还没被取走的：把这辆车每个弹架（LoadoutManager.RackLoadouts 列出来的那些）当前存着的每个
@@ -48,6 +52,7 @@ namespace AmmoDisplay
         struct Entry
         {
             public AmmoType Type;     // 取图标和配色
+            public string IconKey;    // 有值就直接按文件名取图标（烟幕弹这类没有 AmmoType 的格子）
             public string Weapon;     // 枪排用它标名字，主炮排留空
             public int Total;         // 全车剩余（待发 + 存储）
             public int Ready;         // 其中已经在炮/枪自己那个架上的
@@ -90,6 +95,10 @@ namespace AmmoDisplay
         static AccessTools.FieldRef<AmmoFeed, Queue<AmmoType>> MainBeltRef;
         static AccessTools.FieldRef<AmmoFeed, Queue<AmmoType>> AuxBeltRef;
 
+        // 烟幕发射管不在 Weapons 里，发数记在 VehicleSmokeManager 的 _smokeSlots 私有数组上
+        static AccessTools.FieldRef<GHPC.Equipment.VehicleSmokeManager,
+            GHPC.Equipment.VehicleSmokeManager.SmokeSlot[]> SmokeSlotsRef;
+
         static GUIStyle tileStyle;
         static GUIStyle countStyle;
         static int countStyleSize = -1;
@@ -121,6 +130,7 @@ namespace AmmoDisplay
             RoundFeedTimeRef = TryFieldRef<AmmoFeed>("_roundFeedTime");
             MainBeltRef = TryBeltRef("_feedClipMain");
             AuxBeltRef = TryBeltRef("_feedClipAux");
+            SmokeSlotsRef = TrySmokeSlotsRef();
             LoadIcons();
             MelonLogger.Msg("Ammo Display loaded: " + icons.Count + " icon(s) from " + IconFolder()
                 + " (debug log " + (eDebugLog.Value ? "on" : "off") + ")");
@@ -223,6 +233,7 @@ namespace AmmoDisplay
             // ATGM 是车上另一件武器，弹既不挂在主炮的待发架上、也不一定列在 RackLoadouts 里，
             // 只按主炮架建行就会像 BMP-2 那样一整格导弹都不出现
             BuildMissiles(module, shells);
+            BuildSmoke(own, shells);
 
             guns.Clear();
             if (eShowSecondary != null && eShowSecondary.Value) BuildGuns(module, guns);
@@ -258,8 +269,12 @@ namespace AmmoDisplay
             // 每帧都在跑，所以只有数字真的变了才留一行日志，免得调试日志几秒就上百兆
             var sb = new StringBuilder();
             for (int i = 0; i < shells.Count; i++)
-                sb.Append(SafeText(NameOf(shells[i].Type))).Append('=').Append(shells[i].Total)
+            {
+                string label = NameOf(shells[i].Type);
+                if (string.IsNullOrEmpty(label)) label = shells[i].IconKey;
+                sb.Append(SafeText(label)).Append('=').Append(shells[i].Total)
                   .Append('/').Append(shells[i].Ready).Append(' ');
+            }
             for (int i = 0; i < guns.Count; i++)
                 sb.Append(SafeText(guns[i].Weapon)).Append('=').Append(guns[i].Total).Append(' ');
             string now = sb.ToString();
@@ -433,12 +448,40 @@ namespace AmmoDisplay
                     into.Add(new Entry
                     {
                         Type = type,
+                        // 个别车的烟幕发射器也可能挂成 WeaponSystem，按角色直接认成烟幕图标
+                        IconKey = w.Role == WeaponSystemRole.SmokeLauncher ? "smoke" : null,
                         Weapon = string.IsNullOrEmpty(w.Name) ? w.Role.ToString() : w.Name,
                         Total = total,
                         Ready = inRack
                     });
                 }
             }
+        }
+
+        // 烟幕弹一格：玩家按 G 打的是 VehicleSmokeManager，不是 Weapons 里的 WeaponSystemInfo，
+        // 所以上面两排都收不到它。每个发射管的 Rounds 加起来就是全车还剩几发（打一发游戏自己减）。
+        static void BuildSmoke(GHPC.Unit unit, List<Entry> into)
+        {
+            if (unit == null || SmokeSlotsRef == null) return;
+            var broker = unit.InfoBroker;
+            var smoke = broker != null ? broker.VehicleSmokeManager : null;
+            if (smoke == null) return;
+
+            bool hasLauncher;
+            try { hasLauncher = smoke.HasSmokeLauncher; }
+            catch { return; }
+            if (!hasLauncher) return;
+
+            var slots = SmokeSlotsRef(smoke);
+            if (slots == null || slots.Length == 0) return;
+            int rounds = 0;
+            for (int i = 0; i < slots.Length; i++)
+            {
+                var slot = slots[i];
+                if (slot != null && slot.Rounds > 0) rounds += slot.Rounds;
+            }
+            into.Add(new Entry { Type = null, IconKey = "smoke", Total = rounds, Ready = rounds });
+            LogOnce("smoke launcher: slots=" + slots.Length + " rounds=" + rounds);
         }
 
         // 主炮那一排之外，还要把制导导弹补进来。识别用 WeaponSystem.GuidanceUnit（游戏自己也读它：
@@ -594,7 +637,7 @@ namespace AmmoDisplay
                 {
                     var e = guns[i];
                     var rect = new Rect(x, y, secSize, secSize);
-                    DrawArtwork(rect, e.Type, secSize, 1f);
+                    DrawArtwork(rect, e, secSize, 1f);
                     DrawCount(new Rect(rect.xMax + 2f, rect.yMax - countHeight, labelWidth, countHeight),
                         e.Total.ToString(), gunFont);
                     x += rect.width + 2f + labelWidth + gap;
@@ -610,7 +653,7 @@ namespace AmmoDisplay
                     var e = shells[i];
                     var rect = new Rect(x, y, size, size);
                     bool selected = e.Type != null && e.Type == selectedType;
-                    DrawArtwork(rect, e.Type, size, e.Total > 0 ? 1f : 0.3f);
+                    DrawArtwork(rect, e, size, e.Total > 0 ? 1f : 0.3f);
                     // 战雷只框住当前选中的那一种弹，不会一框一整排
                     if (selected && e.Total > 0) DrawFrame(rect, new Color(1f, 1f, 1f, 0.8f), 1f);
                     DrawCount(new Rect(rect.x + 2f, rect.yMax - countHeight, rect.width - 4f, countHeight),
@@ -635,9 +678,10 @@ namespace AmmoDisplay
         }
 
         // 图标（没有图标就按弹种类别上色块 + 短名）；dim < 1 用来把打空的弹种压进背景
-        static void DrawArtwork(Rect rect, AmmoType type, float size, float dim)
+        static void DrawArtwork(Rect rect, Entry entry, float size, float dim)
         {
-            var icon = IconFor(type);
+            var type = entry.Type;
+            var icon = IconFor(entry);
             if (icon != null)
             {
                 GUI.color = new Color(dim, dim, dim, 1f);
@@ -689,6 +733,17 @@ namespace AmmoDisplay
 
         // Icon names are matched against the round's own type data instead of a hardcoded table, so a
         // new shell only needs a file with one of these names dropped into the folder.
+        // 有 IconKey 的格子（烟幕弹）直接按文件名取，不再走弹种匹配
+        static Texture2D IconFor(Entry entry)
+        {
+            if (!string.IsNullOrEmpty(entry.IconKey))
+            {
+                Texture2D keyed;
+                if (icons.TryGetValue(entry.IconKey, out keyed)) return keyed;
+            }
+            return IconFor(entry.Type);
+        }
+
         static Texture2D IconFor(AmmoType type)
         {
             if (type == null) return null;
@@ -709,6 +764,7 @@ namespace AmmoDisplay
                 Log("icon " + (found != null ? "matched" : "MISSING") + " for ["
                     + SafeText(type.Name) + "] short=" + type.ShortName + " visual=" + type.VisualType
                     + " category=" + type.Category + " guidance=" + type.Guidance
+                    + " caliber=" + CaliberMm(type).ToString("0.#") + "mm"
                     + " tried=" + string.Join(",", candidates.ToArray())
                     + " -> " + (found != null ? found.name : "-"));
             }
@@ -726,8 +782,8 @@ namespace AmmoDisplay
             if (type.Guidance != AmmoType.GuidanceType.Unguided) Add(list, "atgm");
             // 全名里的制式代号比短名具体：M2 的「25mm APDS-T M791」短名是 Sabot，照短名会去套 apfsds 的图
             string token = NameToken(type.Name);
-            // 机炮车打的是弹链里的曳光脱壳穿甲弹，用三发一条链的图；主炮那些不带 -T 的 APDS 仍是一发一发的图
-            if (token == "apds" && IsBeltFedApds(type.Name)) Add(list, "apds_belt");
+            // 机炮车打的是弹链里的曳光脱壳穿甲弹，用三发一条链的图；主炮的 APDS（DM13 全名也带 -T）仍是一发一发的图
+            if (token == "apds" && IsBeltFedApds(type)) Add(list, "apds_belt");
             Add(list, token);
             Add(list, Alias(token));
             string shortKey = Slug(type.ShortName.ToString());
@@ -755,17 +811,28 @@ namespace AmmoDisplay
         {
             if (string.IsNullOrEmpty(name)) return "";
             string n = name.ToLowerInvariant();
+            if (n.Contains("smoke")) return "smoke";
             if (n.Contains("apfsds")) return "apfsds";
             if (n.Contains("apds")) return "apds";
             if (n.Contains("heat")) return "heat";
             return "";
         }
 
-        // 机炮弹链用的是曳光弹，全名带 -T（25mm APDS-T M791）。主炮的 APDS 没这个后缀。
-        static bool IsBeltFedApds(string name)
+        // 机炮的 APDS-T（25mm M791、30mm 2A42）用三发弹链图；坦克炮的 APDS-T（105mm DM13）全名也带 -T，
+        // 所以不能看名字，只能看口径。Caliber 是毫米，0 的弹种按 Radius（米）×2000 换算成毫米
+        static bool IsBeltFedApds(AmmoType type)
         {
-            if (string.IsNullOrEmpty(name)) return false;
-            return name.ToLowerInvariant().Contains("apds-t");
+            float caliber = CaliberMm(type);
+            return caliber > 0f && caliber < 50f;
+        }
+
+        static float CaliberMm(AmmoType type)
+        {
+            if (type == null) return 0f;
+            float caliber = type.Caliber;
+            if (caliber > 0f) return caliber;
+            float radius = type.Radius;
+            return radius > 0f ? radius * 2000f : 0f;
         }
 
         // the shell type names in the game and in the icon folder do not always agree, so each side
@@ -787,6 +854,10 @@ namespace AmmoDisplay
                 case "shell": return "he";
                 case "spall": return "he";
                 case "heat": return "heatfs";
+                case "smoke": return "smoke";
+                case "smokegrenade": return "smoke";
+                case "smokescreen": return "smoke";
+                case "smokelauncher": return "smoke";
                 default: return "";
             }
         }
@@ -936,6 +1007,21 @@ namespace AmmoDisplay
             catch (Exception e)
             {
                 Log("field " + fieldName + " unavailable: " + e.Message);
+                return null;
+            }
+        }
+
+        static AccessTools.FieldRef<GHPC.Equipment.VehicleSmokeManager,
+            GHPC.Equipment.VehicleSmokeManager.SmokeSlot[]> TrySmokeSlotsRef()
+        {
+            try
+            {
+                return AccessTools.FieldRefAccess<GHPC.Equipment.VehicleSmokeManager,
+                    GHPC.Equipment.VehicleSmokeManager.SmokeSlot[]>("_smokeSlots");
+            }
+            catch (Exception e)
+            {
+                Log("field _smokeSlots unavailable: " + e.Message);
                 return null;
             }
         }
